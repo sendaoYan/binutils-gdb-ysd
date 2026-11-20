@@ -1,0 +1,40 @@
+# Copyright 2026 Free Software Foundation, Inc.
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+# Test printing a static constexpr member of a class template with a
+# non-type template parameter.
+#
+# In DWARF5, GCC spells the enclosing type S<1> while the C++ expression
+# evaluator looks the member up using the canonical spelling S<1l>.  The
+# cooked index stores the DWARF spelling, so before the fix for PR
+# symtab/33533 the lookup missed and gdb printed <optimized out>.
+
+standard_testfile .cc
+
+set opts {debug c++ dwarf5}
+lappend opts additional_flags=-std=c++11
+
+if {[prepare_for_testing "failed to prepare" $testfile $srcfile $opts]} {
+    return
+}
+
+if {![runto_main]} {
+    return
+}
+
+gdb_test "print s.v" "= 1" \
+    "print static constexpr member of a template"
+
+gdb_test "print 'S<1l>::v'" "= 1" \
+    "print static constexpr member with canonical template arguments"

@@ -23,6 +23,7 @@
 #include "dwarf2/read.h"
 #include "dwarf2/error.h"
 #include "cp-support.h"
+#include "demangle.h"
 #include "c-lang.h"
 #include "ada-lang.h"
 
@@ -304,6 +305,7 @@ cooked_index_shard::canonicalize_names ()
   htab_up gnat_entries (htab_create_alloc (10, hash_entry, eq_entry,
 					   nullptr, xcalloc, xfree));
   std::vector<cooked_index_entry *> new_gnat_entries;
+  std::vector<cooked_index_entry *> new_cxx_entries;
 
   for (cooked_index_entry *entry : m_entries)
     {
@@ -319,7 +321,39 @@ cooked_index_shard::canonicalize_names ()
 	 here, then a check might be required there.  */
       gdb_assert (entry->canonical == nullptr);
       if ((entry->flags & IS_LINKAGE) != 0)
-	entry->canonical = entry->name ();
+	{
+	  entry->canonical = entry->name ();
+
+	  /* For a C++ static data member, the DWARF name of the
+	     enclosing template can use a non-canonical spelling of the
+	     template arguments, while lookups use the canonical
+	     spelling from the demangled linkage name.  For example,
+	     GCC emits S<1>::v while the demangled linkage name is
+	     S<1l>::v.  Add an alias entry using the canonical
+	     demangled name so that the cooked-index lookup succeeds.
+	     PR symtab/33533.  */
+	  if (entry->lang == language_cplus
+	      && (entry->tag == DW_TAG_variable
+		  || entry->tag == DW_TAG_member))
+	    {
+	      gdb::unique_xmalloc_ptr<char> demangled
+		= gdb_demangle (entry->name (),
+				DMGL_PARAMS | DMGL_ANSI | DMGL_TYPES);
+	      if (demangled != nullptr
+		  && strchr (demangled.get (), ':') != nullptr
+		  && strchr (demangled.get (), '<') != nullptr
+		  && strcmp (demangled.get (), entry->name ()) != 0)
+		{
+		  const char *canon = m_names.insert (std::move (demangled));
+		  cooked_index_entry *alias
+		    = create (entry->die_offset, entry->tag,
+			      entry->flags | IS_SYNTHESIZED, entry->lang,
+			      canon, nullptr, entry->per_cu);
+		  alias->canonical = canon;
+		  new_cxx_entries.push_back (alias);
+		}
+	    }
+	}
       else if (entry->lang == language_ada)
 	{
 	  /* Newer versions of GNAT emit DW_TAG_module and use a
@@ -398,6 +432,8 @@ cooked_index_shard::canonicalize_names ()
      m_entries iterator used in the foreach above.  */
   m_entries.insert (m_entries.end (), new_gnat_entries.begin (),
 		    new_gnat_entries.end ());
+  m_entries.insert (m_entries.end (), new_cxx_entries.begin (),
+		    new_cxx_entries.end ());
 
   m_entries.shrink_to_fit ();
   std::sort (m_entries.begin (), m_entries.end (),
